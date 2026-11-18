@@ -191,6 +191,7 @@ namespace ZWaveControllerUI.Models
                 Notify("IsBitAddress");
             }
         }
+
         #endregion
 
         #region Properties
@@ -423,7 +424,7 @@ namespace ZWaveControllerUI.Models
             SelectedCommand = new Command();
             Parameters.Clear();
 
-            Payload = payloadItem.Payload;
+            Payload = payloadItem.Payload?.ToArray();
             IsCrc16Enabled = payloadItem.IsCrc16Enabled;
             IsSuppressMulticastFollowUp = payloadItem.IsSuppressMulticastFollowUp;
             IsForceMulticastEnabled = payloadItem.IsForceMulticastEnabled;
@@ -465,7 +466,7 @@ namespace ZWaveControllerUI.Models
             if (payloadItem.Payload != null && !Payload.SequenceEqual(payloadItem.Payload))
             {
                 //Parameters.Clear();
-                Payload = payloadItem.Payload;
+                Payload = payloadItem.Payload?.ToArray();
             }
         }
 
@@ -558,28 +559,43 @@ namespace ZWaveControllerUI.Models
 
         ICommandClassesModel ICommandClassesModel.Clone()
         {
-            //return null;
-            ICommandClassesModel ret = new CommandClassesViewModel(ApplicationModel);
-            ret.Payload = ApplicationModel.CommandClassesModel.Payload;
-            ret.IsCrc16Enabled = ApplicationModel.CommandClassesModel.IsCrc16Enabled;
-            ret.IsSuppressMulticastFollowUp = ApplicationModel.CommandClassesModel.IsSuppressMulticastFollowUp;
-            ret.IsForceMulticastEnabled = ApplicationModel.CommandClassesModel.IsForceMulticastEnabled;
-            ret.IsSupervisionGetEnabled = ApplicationModel.CommandClassesModel.IsSupervisionGetEnabled;
-            ret.IsSupervisionGetStatusUpdatesEnabled = ApplicationModel.CommandClassesModel.IsSupervisionGetStatusUpdatesEnabled;
-            ret.IsAutoIncSupervisionSessionId = ApplicationModel.CommandClassesModel.IsAutoIncSupervisionSessionId;
-            ret.SecureType = ApplicationModel.CommandClassesModel.SecureType;
-            ret.IsMultiChannelEnabled = ApplicationModel.CommandClassesModel.IsMultiChannelEnabled;
-            ret.IsBitAddress = ApplicationModel.CommandClassesModel.IsBitAddress;
-            ret.IsExpectCommand = ApplicationModel.CommandClassesModel.IsExpectCommand;
+            var source = ApplicationModel.CommandClassesModel;
+            var ret = new CommandClassesViewModel(ApplicationModel)
+            {
+                Payload = source.Payload?.ToArray(),
+                IsCrc16Enabled = source.IsCrc16Enabled,
+                IsSuppressMulticastFollowUp = source.IsSuppressMulticastFollowUp,
+                IsForceMulticastEnabled = source.IsForceMulticastEnabled,
+                IsSupervisionGetEnabled = source.IsSupervisionGetEnabled,
+                IsSupervisionGetStatusUpdatesEnabled = source.IsSupervisionGetStatusUpdatesEnabled,
+                SupervisionSessionId = source.SupervisionSessionId,
+                IsAutoIncSupervisionSessionId = source.IsAutoIncSupervisionSessionId,
+                SecureType = source.SecureType,
+                IsMultiChannelEnabled = source.IsMultiChannelEnabled,
+                IsBitAddress = source.IsBitAddress,
+                IsExpectCommand = source.IsExpectCommand,
+                ExpectedCommand = source.ExpectedCommand,
+                SourceEndPoint = source.SourceEndPoint,
+                DestinationEndPoint = source.DestinationEndPoint,
+                SelectedNodeItems = source.SelectedNodeItems?.Select(item => (NodeTag)item.Clone()).ToList() ?? new List<NodeTag>()
+            };
             return ret;
         }
 
 
         public ICommandClassesModel Clone(PayloadItem payloadItem)
         {
-            FillCommandClassesViewModel(payloadItem);
-            //?:
-            return null;
+            if (payloadItem == null)
+            {
+                return null;
+            }
+
+            var ret = new CommandClassesViewModel(ApplicationModel);
+            ret.FillCommandClassesViewModel(payloadItem);
+            ret.SelectedNodeItems = SelectedNodeItems?
+                .Select(item => (NodeTag)item.Clone())
+                .ToList() ?? new List<NodeTag>();
+            return ret;
         }
     }
 }

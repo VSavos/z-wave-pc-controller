@@ -19,16 +19,18 @@ namespace ZWaveController.Commands
 
         protected override bool CanCancelAction(object param) => true;
 
+        protected override void CancelAction(object param) => ControllerSession.PredefinedPayloadsService.CancelGroup();
+
         public override bool CanExecuteModelDependent(object param)
         {
             return ApplicationModel.SelectedNode != null &&
-                _model.SelectedGroup != null && _model.SelectedGroup.Items.Count > 0;
+                !_model.IsFlowRunning &&
+                _model.SelectedGroup != null && 
+                _model.SelectedGroup.Items.Count > 0;
         }
 
         protected override void ExecuteInner(object parameter)
         {
-            //add abort group
-            //ApplicationModel.LastCommandExecutionResult = 
             ControllerSession.PredefinedPayloadsService.RunGroup(_model.SelectedGroup.Name);
         }
 

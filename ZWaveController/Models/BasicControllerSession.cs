@@ -90,6 +90,7 @@ namespace ZWaveController.Models
         internal /*private*/ Device _device;
         public IDevice Controller => _device as IDevice;
         public ILogService Logger { get; set; }
+        public ActionToken ActiveSendToken { get; set; }
         public ISenderHistoryService SenderHistoryService { get; set; }
         public IPredefinedPayloadsService PredefinedPayloadsService { get; set; }
         public SecurityManager SecurityManager { get; set; }
@@ -301,13 +302,20 @@ namespace ZWaveController.Models
 
         public ActionResult SendData(NodeTag node, byte[] txData, int maxBytesPerFrame, SubstituteFlags substituteFlag, ActionToken token, bool isMultiChanelProcessed = false)
         {
-            SubstituteSettings substituteSettings = new SubstituteSettings();
-            substituteSettings.S0MaxBytesPerFrameSize = maxBytesPerFrame;
-            substituteSettings.SubstituteFlags = substituteFlag;
-            return SendDataInternal(node, txData, substituteSettings, ControllerSessionsContainer.Config.TxOptions, token, isMultiChanelProcessed);
+            return SendData(node, txData, new SubstituteSettings(substituteFlag, maxBytesPerFrame), token, isMultiChanelProcessed);
+        }
+
+        public ActionResult SendData(NodeTag node, byte[] txData, SubstituteSettings settings, ActionToken token, bool isMultiChanelProcessed = false)
+        {
+            return SendDataInternal(node, txData, settings, ControllerSessionsContainer.Config.TxOptions, token, isMultiChanelProcessed);
         }
 
         public ActionResult SendData(NodeTag[] nodes, byte[] txData, int maxBytesPerFrame, SubstituteFlags substituteFlag, ActionToken token, bool isMultiChanelProcessed = false)
+        {
+            return SendData(nodes, txData, new SubstituteSettings(substituteFlag, maxBytesPerFrame), token, isMultiChanelProcessed);
+        }
+
+        public ActionResult SendData(NodeTag[] nodes, byte[] txData, SubstituteSettings substituteSettings, ActionToken token, bool isMultiChanelProcessed = false)
         {
             if (txData != null && txData.Length > 0 && nodes != null && nodes.Length > 0)
             {
@@ -321,44 +329,30 @@ namespace ZWaveController.Models
                     foreach (var endpoint in nodes)
                     {
                         if (endpoint.EndPointId > 0 && endpoint.EndPointId < 8)
-                        {
                             endpointsBitmask[endpoint.EndPointId - 1] = true;
-                        }
                     }
-                    return SendData(new NodeTag(nodes[0].Id, (byte)endpointsBitmask, true), txData, maxBytesPerFrame, substituteFlag, token, isMultiChanelProcessed);
+                    return SendData(new NodeTag(nodes[0].Id, (byte)endpointsBitmask, true), txData, substituteSettings, token, isMultiChanelProcessed);
                 }
-                else
-                {
-                    token = null;
-                    SubstituteSettings substituteSettings = new SubstituteSettings();
-                    substituteSettings.S0MaxBytesPerFrameSize = maxBytesPerFrame;
-                    substituteSettings.SubstituteFlags = substituteFlag;
-                    var txOptions = ControllerSessionsContainer.Config.TxOptions;
-                    if (substituteSettings.SubstituteFlags.HasFlag(SubstituteFlags.DenyFollowup))
-                    {
-                        txOptions = ControllerSessionsContainer.Config.TxOptions & (~TransmitOptions.TransmitOptionAcknowledge);
-                    }
-                    using (var logAction = ReportAction(caption, token))
-                    {
-                        ActionResult ret;
-                        if (_device is BridgeController)
-                        {
-                            ret = ((BridgeController)_device).SendDataMultiBridge(_device.Network.NodeTag, nodes, txData, txOptions, substituteSettings, out token);
-                        }
-                        else
-                        {
-                            ret = _device.SendDataMulti(nodes, txData, txOptions, substituteSettings, out token);
-                        }
-                        logAction.Token = token;
-                        return ret;
-                    }
-                }
-            }
-            else
-            {
+
                 token = null;
-                return null;
+                var txOptions = ControllerSessionsContainer.Config.TxOptions;
+                if (substituteSettings.SubstituteFlags.HasFlag(SubstituteFlags.DenyFollowup))
+                    txOptions &= ~TransmitOptions.TransmitOptionAcknowledge;
+
+                using (var logAction = ReportAction(caption, token))
+                {
+                    token = _device is BridgeController
+                        ? ((BridgeController)_device).SendDataMultiBridge(_device.Network.NodeTag, nodes, txData, txOptions, substituteSettings, (Action<IActionItem>)null)
+                        : _device.SendDataMulti(nodes, txData, txOptions, substituteSettings, (Action<IActionItem>)null);
+                    ActiveSendToken = token;
+                    logAction.Token = token;
+                    var result = token?.WaitCompletedSignal();
+                    logAction.State = result?.State ?? ActionStates.Failed;
+                    return result;
+                }
             }
+
+            return null;
         }
 
         public ActionResult SendData(NodeTag node, byte[] txData, ActionToken token)
@@ -381,7 +375,8 @@ namespace ZWaveController.Models
                 {
                     RequestNodeInfo(node, token);
                 }
-                if (node.EndPointId > 0 && !isMultiChanelProcessed)
+                if (node.EndPointId > 0 && !isMultiChanelProcessed && IsEndDeviceLibrary &&
+                    _device.Library != Libraries.EndDeviceSysTestLib)
                 {
                     COMMAND_CLASS_MULTI_CHANNEL_V4.MULTI_CHANNEL_CMD_ENCAP multiChannelCmd = new COMMAND_CLASS_MULTI_CHANNEL_V4.MULTI_CHANNEL_CMD_ENCAP();
 
@@ -400,11 +395,13 @@ namespace ZWaveController.Models
                 }
                 using (var logAction = ReportAction(caption, null, new LogRawData { RawData = txData, SourceId = node.Id }))
                 {
-                    var ret = _device.SendData(node, txData, txOptions, substituteSettings, out token);
-                    logAction.State = ret.State;
+                    token = _device.SendData(node, txData, txOptions, substituteSettings, (Action<IActionItem>)null);
+                    ActiveSendToken = token;
+                    logAction.Token = token;
+                    var ret = token?.WaitCompletedSignal();
+                    logAction.State = ret?.State ?? ActionStates.Failed;
 
-
-                    if (ret.TransmitStatus == TransmitStatuses.CompleteOk)
+                    if (ret is SendDataResult sendDataResult && sendDataResult.TransmitStatus == TransmitStatuses.CompleteOk)
                     {
                         if (txData[0] == COMMAND_CLASS_WAKE_UP.ID && txData[1] == COMMAND_CLASS_WAKE_UP.WAKE_UP_INTERVAL_SET.ID)
                         {
@@ -454,10 +451,21 @@ namespace ZWaveController.Models
 
         public ActionResult RequestData(NodeTag node, byte[] txData, ref byte[] rxData, int timeoutMs, ActionToken token)
         {
-            return RequestData(node, txData, ref rxData, timeoutMs, null, token);
+            return RequestData(node, txData, ref rxData, timeoutMs, (Action)null, token);
+        }
+
+        public ActionResult RequestData(NodeTag node, byte[] txData, ref byte[] rxData, int timeoutMs, SubstituteSettings settings, ActionToken token)
+        {
+            return RequestDataInternal(node, txData, ref rxData, timeoutMs, null, settings, token);
         }
 
         public ActionResult RequestData(NodeTag node, byte[] txData, ref byte[] rxData, int timeoutMs, Action sendDataSubstituteCallback, ActionToken token)
+        {
+            return RequestDataInternal(node, txData, ref rxData, timeoutMs, sendDataSubstituteCallback, null, token);
+        }
+
+        private ActionResult RequestDataInternal(NodeTag node, byte[] txData, ref byte[] rxData, int timeoutMs,
+            Action sendDataSubstituteCallback, SubstituteSettings settings, ActionToken token)
         {
             if (_device.Network.GetCommandClasses(node) == null && !_device.IsEndDeviceApi)
             {
@@ -496,7 +504,10 @@ namespace ZWaveController.Models
             }
             RequestDataOperation operation = new RequestDataOperation(_device.Network, NodeTag.Empty, node, txData, ControllerSessionsContainer.Config.TxOptions, rxData, 2, timeoutMs);
             operation.SendDataSubstituteCallback = sendDataSubstituteCallback;
+            if (settings != null)
+                operation.SubstituteSettings = settings;
             token = _device.ExecuteAsync(operation, null);
+            ActiveSendToken = token;
             var res = (RequestDataResult)token.WaitCompletedSignal();
             rxData = res.Command;
             return res;
@@ -4067,6 +4078,7 @@ namespace ZWaveController.Models
 
                 var crc16EncapManager = new Crc16EncapManager(_device.Network);
                 _device.SessionClient.AddSubstituteManager(crc16EncapManager);
+                _device.SessionClient.AddSubstituteManager(new MultiChannelManager(_device.Network));
                 var supervisionManager = new SupervisionManager(_device.Network, (node, data) =>
                 {
                     if (node.Id > 0x00 && node.Id != 0xFF)

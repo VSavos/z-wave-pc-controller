@@ -24,6 +24,7 @@ namespace ZWaveController.Interfaces
         IDataSource DataSource { get; }
         IDevice Controller { get; }
         ILogService Logger { get; set; }
+        ActionToken ActiveSendToken { get; set; }
         ISenderHistoryService SenderHistoryService { get; set; }
         IPredefinedPayloadsService PredefinedPayloadsService { get; set; }
         IPollingService PollingService { get; }
@@ -45,8 +46,11 @@ namespace ZWaveController.Interfaces
         ActionResult SendData(NodeTag node, byte[] txData, ActionToken token);
         ActionResult SendData(NodeTag name, byte[] txData, TransmitOptions txOptions, ActionToken token);
         ActionResult SendData(NodeTag node, byte[] data, int maxBytesPerFrame, SubstituteFlags substituteFlag, ActionToken token, bool isMultiChanelProcessed = false);
+        ActionResult SendData(NodeTag node, byte[] data, SubstituteSettings settings, ActionToken token, bool isMultiChanelProcessed = false);
         ActionResult SendData(NodeTag[] nodes, byte[] data, int maxBytesPerFrame, SubstituteFlags substituteFlag, ActionToken token, bool isMultiChanelProcessed = false);
+        ActionResult SendData(NodeTag[] nodes, byte[] data, SubstituteSettings settings, ActionToken token, bool isMultiChanelProcessed = false);
         ActionResult RequestData(NodeTag name, byte[] txData, ref byte[] rxData, int timeoutMs, ActionToken token);
+        ActionResult RequestData(NodeTag name, byte[] txData, ref byte[] rxData, int timeoutMs, SubstituteSettings settings, ActionToken token);
         ActionResult RequestData(NodeTag name, byte[] txData, ref byte[] rxData, int timeoutMs, Action SendDataSubstituteCallback, ActionToken token);
         void SendSerialApi(byte[] data, out ActionToken mToken);
         void SetNodeInformation(DeviceOptions deviceOptions, byte generic, byte specific, byte[] commandClasses, out ActionToken token);

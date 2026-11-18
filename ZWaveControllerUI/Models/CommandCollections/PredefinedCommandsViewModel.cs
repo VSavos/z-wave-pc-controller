@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // SPDX-FileCopyrightText: Silicon Laboratories Inc. <https://www.silabs.com>
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using Utils.UI.Interfaces;
 using ZWaveController;
@@ -11,29 +12,19 @@ using ZWaveController.Models;
 namespace ZWaveControllerUI.Models
 {
     /// <summary>
-    /// ViewModel to manage Predefined Command Groups.
+    /// Displays and edits predefined Z-Wave command groups and send sequences.
     /// </summary>
     public class PredefinedCommandsViewModel : DialogVMBase, IPredefinedCommandsModel
     {
         public PredefinedCommandsViewModel(IApplicationModel applicationModel) : base(applicationModel)
         {
             Title = "Predefined Commands Manager";
-
-            //DialogSettings.IsResizable = true;
-            //DialogSettings.Width = 450;
-            //DialogSettings.Height = 350;
-            //this.PropertyChanged += new PropertyChangedEventHandler(SelectedGroup_Changed);
+            FlowStatus = "Idle";
+            DialogSettings.IsResizable = true;
+            DialogSettings.Width = 650;
+            DialogSettings.Height = 620;
         }
 
-        //private void SelectedGroup_Changed(object sender, PropertyChangedEventArgs e)
-        //{
-        //    if (e.PropertyName == "SelectedGroup")
-        //    {
-        //        TempGroupName = SelectedGroup.Name;
-        //    }
-        //}
-
-        #region Properies IPredefinedCommandsModel
 
         public IPredefinedCommandGroup CreateFavoriteGroup(string name)
         {
@@ -65,7 +56,7 @@ namespace ZWaveControllerUI.Models
             {
                 _selectedGroup = value;
                 Notify("SelectedGroup");
-                if (SelectedGroup != null) //or SelectedGroup_Changed
+                if (SelectedGroup != null)
                 {
                     TempGroupName = SelectedGroup.Name;
                 }
@@ -112,6 +103,24 @@ namespace ZWaveControllerUI.Models
             }
         }
 
+        private bool _isFlowRunning;
+        public bool IsFlowRunning
+        {
+            get { return _isFlowRunning; }
+            set
+            {
+                _isFlowRunning = value;
+                Notify("IsFlowRunning");
+            }
+        }
+
+        private string _flowStatus;
+        public string FlowStatus
+        {
+            get { return _flowStatus; }
+            set { _flowStatus = value; Notify("FlowStatus"); }
+        }
+
         public ISelectableItem<PredefinedPayload> GetItem(PayloadItem payloadItem)
         {
             var id = (SelectedGroup != null && SelectedGroup.Items.Any()) ?
@@ -123,10 +132,10 @@ namespace ZWaveControllerUI.Models
             return new SelectableItem<PredefinedPayload>(item);
         }
 
-        #endregion
-
-        #region Commands
         public SendPredefinedGroupCommand SendPredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<SendPredefinedGroupCommand>();
+        public CommandBase CancelFlowCommand => CommandsFactory.CommandBaseGet<CommandBase>(param =>
+            CommandsFactory.CommandControllerSessionGet<SendPredefinedGroupCommand>()?.Cancel(param),
+            param => IsFlowRunning);
         public LoadPredefinedGroupCommand LoadPredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<LoadPredefinedGroupCommand>();
         public SavePredefinedGroupCommand SavePredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<SavePredefinedGroupCommand>();
 
@@ -141,19 +150,16 @@ namespace ZWaveControllerUI.Models
             });
         }
 
-        //Groups:
-        public DeletePredefinedGroupsCommand DeletePredefinedGroupsCommand => CommandsFactory.CommandControllerSessionGet<DeletePredefinedGroupsCommand>(); //clear.
+        public DeletePredefinedGroupsCommand DeletePredefinedGroupsCommand => CommandsFactory.CommandControllerSessionGet<DeletePredefinedGroupsCommand>();
         public AddPredefinedGroupCommand AddPredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<AddPredefinedGroupCommand>();
         public DeletePredefinedGroupCommand DeletePredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<DeletePredefinedGroupCommand>();
         public CopyPredefinedGroupCommand CopyPredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<CopyPredefinedGroupCommand>();
         public RenamePredefinedGroupCommand RenamePredefinedGroupCommand => CommandsFactory.CommandControllerSessionGet<RenamePredefinedGroupCommand>();
-        //Items:
         public AddPredefinedItemCommand AddPredefinedItemCommand => CommandsFactory.CommandControllerSessionGet<AddPredefinedItemCommand>();
         public DeletePredefinedCommandCommand DeletePredefinedCommandCommand => CommandsFactory.CommandControllerSessionGet<DeletePredefinedCommandCommand>();
         public MoveUpPredefinedItemCommand MoveUpPredefinedItemCommand => CommandsFactory.CommandControllerSessionGet<MoveUpPredefinedItemCommand>();
         public MoveDownPredefinedItemCommand MoveDownPredefinedItemCommand => CommandsFactory.CommandControllerSessionGet<MoveDownPredefinedItemCommand>();
         public CopyPredefinedItemCommand CopyPredefinedItemCommand => CommandsFactory.CommandControllerSessionGet<CopyPredefinedItemCommand>();
-        #endregion
 
         private string _selectedItemDetails;
         public string SelectedItemDetails
@@ -171,7 +177,7 @@ namespace ZWaveControllerUI.Models
     }
 
     /// <summary>
-    /// Group of predefined commands <see cref="PredefinedPayload"/>
+    /// A named group of predefined Z-Wave payload frames.
     /// </summary>
     public class PredefinedCommandGroup : IPredefinedCommandGroup
     {

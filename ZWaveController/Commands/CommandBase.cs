@@ -49,7 +49,18 @@ namespace ZWaveController.Commands
         {
             IsCancelling = false;
             var execute = _execute ?? ExecuteAction;
-            execute(param);
+            try
+            {
+                execute(param);
+            }
+            finally
+            {
+                NotifyCompleted();
+            }
+        }
+
+        internal void NotifyCompleted()
+        {
             OnCompleted?.Invoke();
         }
 

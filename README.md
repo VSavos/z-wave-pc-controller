@@ -18,6 +18,8 @@ Watch it in action with this
 
 ## Usage
 
+See the [PC Controller user guide](docs/pc-controller-user-guide.md) for the common workflow for connecting to a controller and using PCC's main tools.
+
 The tool is mainly supporting Windows OS, but can also be used on other win32 runtimes.
 
 ### GNU/Linux support

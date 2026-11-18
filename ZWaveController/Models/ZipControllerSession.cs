@@ -70,6 +70,7 @@ namespace ZWaveController.Models
         private ZipController _zipController;
         public IDevice Controller => _zipController as IDevice;
         public ILogService Logger { get; set; }
+        public ActionToken ActiveSendToken { get; set; }
         public ISenderHistoryService SenderHistoryService { get; set; }
         public IPredefinedPayloadsService PredefinedPayloadsService { get; set; }
         public SecurityManager SecurityManager { get; private set; }
@@ -107,32 +108,38 @@ namespace ZWaveController.Models
 
         public ActionResult SendData(NodeTag node, byte[] txData, ActionToken token)
         {
+            return SendData(node, txData, new SubstituteSettings(), token);
+        }
+
+        public ActionResult SendData(NodeTag node, byte[] txData, SubstituteSettings settings, ActionToken token, bool isMultiChanelProcessed = false)
+        {
             if (txData != null && txData.Length > 0)
             {
+                txData = txData.ToArray();
+                if (settings.HasFlag(SubstituteFlags.UseSupervision))
+                    txData = SupervisionManager.CreateSupervisionGet(txData, settings.SupervisionSessionId,
+                        settings.IsSupervisionStatusUpdatesEnabled);
+
+                if (node.EndPointId > 0 || settings.HasFlag(SubstituteFlags.UseMultiChannel))
+                {
+                    var sourceEndPoint = node.EndPointId > 0 ? (byte)0 : settings.SrcEndPoint;
+                    var destinationEndPoint = node.EndPointId > 0 ? node.EndPointId : settings.DstEndPoint;
+                    txData = MultiChannelManager.Encapsulate(txData, sourceEndPoint, destinationEndPoint,
+                        settings.IsBitAdress || node.IsBitAddress, settings.HasFlag(SubstituteFlags.UseMultiChannel));
+                }
+
+                if (settings.HasFlag(SubstituteFlags.UseCrc16Encap))
+                    txData = Crc16EncapManager.Encapsulate(txData);
+
                 var command = ApplicationModel.ZWaveDefinition.ParseApplicationStringName(txData);
                 var caption = "Send " + command + " to node " + node;
-                if (node.EndPointId > 0)
-                {
-                    var multiChannelCmd = new COMMAND_CLASS_MULTI_CHANNEL_V3.MULTI_CHANNEL_CMD_ENCAP();
-                    multiChannelCmd.commandClass = txData[0];
-                    multiChannelCmd.command = txData[1];
-                    multiChannelCmd.parameter = new List<byte>();
-                    for (int i = 2; i < txData.Length; i++)
-                    {
-                        multiChannelCmd.parameter.Add(txData[i]);
-                    }
-                    multiChannelCmd.properties1.res = 0;
-                    multiChannelCmd.properties1.sourceEndPoint = 0;
-                    multiChannelCmd.properties2.bitAddress = 0;
-                    multiChannelCmd.properties2.destinationEndPoint = node.EndPointId;
-                    txData = multiChannelCmd;
-                }
                 using (var logAction = ReportAction(caption, null))
                 {
                     SendDataResult ret;
                     if (node.Id == _zipController.Id)
                     {
                         token = _zipController.SendData(_headerExtension, txData, null);
+                        ActiveSendToken = token;
                         ret = (SendDataResult)token.WaitCompletedSignal();
                     }
                     else
@@ -140,6 +147,7 @@ namespace ZWaveController.Models
                         if (Devices.ContainsKey(node))
                         {
                             token = Devices[node].SendData(_headerExtension, txData, null);
+                            ActiveSendToken = token;
                             ret = (SendDataResult)token.WaitCompletedSignal();
                         }
                         else
@@ -169,17 +177,24 @@ namespace ZWaveController.Models
             return RequestData(node, _headerExtension, txData, ref rxData, timeoutMs, token);
         }
 
+        public ActionResult RequestData(NodeTag node, byte[] txData, ref byte[] rxData, int timeoutMs, SubstituteSettings settings, ActionToken token)
+        {
+            return RequestData(node, txData, ref rxData, timeoutMs, token);
+        }
+
         public RequestDataResult RequestData(NodeTag node, byte[] txExtension, byte[] txData, ref byte[] rxData, int timeoutMs, ActionToken token)
         {
             RequestDataResult ret = null;
             if (node == _zipController.Network.NodeTag)
             {
                 token = _zipController.RequestData(txExtension, txData, rxData, timeoutMs, null);
+                ActiveSendToken = token;
                 ret = (RequestDataResult)token.WaitCompletedSignal();
             }
             else
             {
                 token = Devices[node].RequestData(txExtension, txData, rxData, timeoutMs, null);
+                ActiveSendToken = token;
                 ret = (RequestDataResult)token.WaitCompletedSignal();
             }
             rxData = ret.ReceivedData;
@@ -1590,6 +1605,11 @@ namespace ZWaveController.Models
             Logger.Log("Multicast send not implemented for ZIP");
             token = null;
             return null;
+        }
+
+        public ActionResult SendData(NodeTag[] nodeIds, byte[] data, SubstituteSettings settings, ActionToken token, bool isMultiChanelProcessed = false)
+        {
+            return SendData(nodeIds, data, settings.S0MaxBytesPerFrameSize, settings.SubstituteFlags, token, isMultiChanelProcessed);
         }
 
         public ActionResult SetLearnMode(LearnModes mode, out ActionToken token)

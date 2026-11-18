@@ -6,7 +6,7 @@
              xmlns:local="clr-namespace:ZWaveController.Enums;assembly=ZWaveController"
              xmlns:converters="clr-namespace:ZWaveControllerUI.Converters"
              AutomationProperties.AutomationId="ID_PREDEFINED_COMMANDS_VIEW"
-             Height="550" Width="450">
+             Width="650" Height="620" MinWidth="450" MinHeight="550">
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
@@ -16,6 +16,7 @@
             <bind:CommandReference x:Key="SavePredefinedGroupCommandRef" Command="{Binding SavePredefinedGroupCommand }"/>
             <bind:CommandReference x:Key="LoadPredefinedGroupCommandRef" Command="{Binding LoadPredefinedGroupCommand}"/>
             <bind:CommandReference x:Key="SendPredefinedGroupCommandRef" Command="{Binding SendPredefinedGroupCommand}"/>
+            <bind:CommandReference x:Key="CancelFlowCommandRef" Command="{Binding CancelFlowCommand}"/>
 
             <bind:CommandReference x:Key="AddPredefinedGroupCommandRef" Command="{Binding AddPredefinedGroupCommand}"/>
             <bind:CommandReference x:Key="DeletePredefinedGroupsCommandRef" Command="{Binding DeletePredefinedGroupsCommand}"/>
@@ -62,14 +63,30 @@
 
 
         <DockPanel DockPanel.Dock="Bottom" Margin="2">
-            <ScrollViewer DockPanel.Dock="Bottom" Margin="0"
+            <TextBlock DockPanel.Dock="Top" Text="Selected frame details" FontWeight="SemiBold" Margin="2,0,2,4"/>
+            <ScrollViewer Margin="0"
                       VerticalScrollBarVisibility="Auto"
                       HorizontalScrollBarVisibility="Disabled">
-                <TextBox Text="{Binding SelectedItemDetails}" TextWrapping="Wrap" IsReadOnly="True" Height="100"/>
+                <TextBox Text="{Binding SelectedItemDetails}" TextWrapping="Wrap" IsReadOnly="True" Height="100"
+                         BorderThickness="0" Background="Transparent"
+                         AutomationProperties.AutomationId="ID_PREDEFINED_SELECTED_FRAME_DETAILS"/>
             </ScrollViewer>
         </DockPanel>
+        <DockPanel DockPanel.Dock="Bottom" Margin="2">
+            <Grid DockPanel.Dock="Top">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding FlowStatus}" FontWeight="SemiBold" Margin="2,0"/>
+                <WrapPanel Grid.Column="1" HorizontalAlignment="Right" VerticalAlignment="Center">
+                    <Button Content="Cancel" Command="{StaticResource CancelFlowCommandRef}" AutomationProperties.AutomationId="ID_PREDEFINED_FLOW_CANCEL"/>
+                    <Button Content="Send List" Command="{StaticResource SendPredefinedGroupCommandRef}"
+                            AutomationProperties.AutomationId="ID_PREDEFINED_FLOW_SEND"/>
+                </WrapPanel>
+            </Grid>
+        </DockPanel>
         <DockPanel  DockPanel.Dock="Bottom" Margin="2">
-            <Button Content="Send List" Command="{StaticResource SendPredefinedGroupCommandRef}" DockPanel.Dock="Right"/>
             <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
                 <Button Command="{StaticResource MoveUpCommandRef}" Width="40">
                     <md:PackIcon Kind="ArrowUp" Width="24" Height="24" Margin="2"/>

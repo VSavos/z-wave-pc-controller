@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // SPDX-FileCopyrightText: Silicon Laboratories Inc. <https://www.silabs.com>
-﻿using Newtonsoft.Json;
+using Newtonsoft.Json;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -17,43 +17,163 @@ namespace ZWaveController.Services
     {
         private readonly IApplicationModel _applicationModel;
         private readonly IPredefinedCommandsModel _predefinesModel;
+        private readonly object _flowLock = new object();
+        private CancellationTokenSource _flowCancellation;
+        private SendCommand _activeSendCommand;
 
         public PredefinedPayloadsService(IApplicationModel applicationModel)
         {
-            _applicationModel = applicationModel;
-            _predefinesModel = _applicationModel.PredefinedCommandsModel;
+            _applicationModel = applicationModel ?? throw new ArgumentNullException(nameof(applicationModel));
+            _predefinesModel = _applicationModel.PredefinedCommandsModel ?? throw new ArgumentNullException(nameof(applicationModel.PredefinedCommandsModel));
         }
 
-        /// <summary>
-        /// Get unique group name from param <paramref name="name"/>
-        /// </summary>
-        /// <param name="name">Name</param>
-        /// <returns>New Name if <paramref name="name"/> is exists.</returns>
         private string GetGroupName(string name)
         {
             return _predefinesModel.PredefinedGroups.Any(i => i.Name == name) ? GetGroupName(name + "(1)") : name;
         }
 
-        /// <summary>
-        /// Execute Sequently Send Data commands.
-        /// </summary>
-        /// <param name="commands">Commands to send<see cref="PredefinedPayload"/>.</param>
         private void RunCommands(IEnumerable<PredefinedPayload> commands)
         {
-            if (commands == null || !commands.Any())
+            var commandList = commands?
+                .Where(item => item != null && item.PayloadItem != null)
+                .OrderBy(item => item.Id)
+                .ToList();
+
+            if (commandList == null || commandList.Count == 0)
                 return;
 
-            //var commandClass = _applicationModel.CommandClassesModel.Clone();
-            _applicationModel.CommandClassesModel.IsExpectCommand = false;
-            foreach (var command in commands.OrderBy(i => i.Id))
+            CancellationTokenSource cancellationSource;
+            lock (_flowLock)
             {
-                //if (command.PayloadItem.SecureType != SecureType.SerialApi)  // ATTENTION!
-                _applicationModel.CommandClassesModel = _applicationModel.CommandClassesModel.Clone(command.PayloadItem);
-                var sendCommand = CommandsFactory.CommandControllerSessionGet<SendCommand>();
-                CommandsFactory.CommandRunner.ExecuteAsync(sendCommand, null);
-                Thread.Sleep(_applicationModel.SendDataSettingsModel.DelayResponseMs == 0 ? 200 : _applicationModel.SendDataSettingsModel.DelayResponseMs);
+                if (_flowCancellation != null)
+                    return;
+                _flowCancellation = cancellationSource = new CancellationTokenSource();
             }
-            //_applicationModel.CommandClassesModel = commandClass; // DOES NOT WORK - review!
+
+            var cancellation = cancellationSource.Token;
+            ICommandClassesModel originalModel = null;
+
+            try
+            {
+                _applicationModel.Invoke(() =>
+                {
+                    originalModel = _applicationModel.CommandClassesModel;
+                    _predefinesModel.IsFlowRunning = true;
+                    _predefinesModel.FlowStatus = "Sending";
+                });
+
+                if (originalModel == null)
+                    throw new InvalidOperationException("CommandClassesModel is null.");
+
+                foreach (var item in commandList)
+                {
+                    if (cancellation.IsCancellationRequested)
+                        throw new OperationCanceledException(cancellation);
+
+                    SendCommand sendCommand = null;
+                    using (var sendCompleted = new ManualResetEventSlim(false))
+                    {
+                        Action onCompleted = () => sendCompleted.Set();
+                        CancellationTokenRegistration registration = default(CancellationTokenRegistration);
+                        try
+                        {
+                            _applicationModel.Invoke(() =>
+                            {
+                                if (cancellation.IsCancellationRequested)
+                                    throw new OperationCanceledException(cancellation);
+
+                                var clonedModel = originalModel.Clone(item.PayloadItem);
+                                if (clonedModel == null)
+                                    throw new InvalidOperationException("Cloned CommandClassesModel is null.");
+
+                                clonedModel.IsExpectCommand = false;
+                                _applicationModel.CommandClassesModel = clonedModel;
+
+                                sendCommand = CommandsFactory.CommandControllerSessionGet<SendCommand>();
+                                if (sendCommand == null)
+                                    throw new InvalidOperationException("SendCommand instance is null.");
+
+                                sendCommand.UpdateTargetDevice();
+                                if (sendCommand.IsSleepingTarget)
+                                    throw new InvalidOperationException("The selected target is sleeping and cannot send the list.");
+
+                                lock (_flowLock)
+                                {
+                                    if (cancellation.IsCancellationRequested)
+                                        throw new OperationCanceledException(cancellation);
+                                    _activeSendCommand = sendCommand;
+                                }
+
+                                sendCommand.OnCompleted += onCompleted;
+                                registration = cancellation.Register(() => sendCompleted.Set());
+                                CommandsFactory.CommandRunner.ExecuteAsync(sendCommand, null);
+                            });
+
+                            sendCompleted.Wait(cancellation);
+                            if (cancellation.IsCancellationRequested)
+                                throw new OperationCanceledException(cancellation);
+
+                            if (sendCommand == null || sendCommand.ExecutionResult != CommandExecutionResult.OK)
+                                throw new InvalidOperationException("The controller failed to send a list item.");
+                        }
+                        finally
+                        {
+                            registration.Dispose();
+                            if (sendCommand != null)
+                                sendCommand.OnCompleted -= onCompleted;
+                            lock (_flowLock)
+                            {
+                                if (ReferenceEquals(_activeSendCommand, sendCommand))
+                                    _activeSendCommand = null;
+                            }
+                        }
+                    }
+
+                    var delay = _applicationModel.SendDataSettingsModel != null
+                        ? _applicationModel.SendDataSettingsModel.DelayResponseMs
+                        : 0;
+                    if (delay > 0 && cancellation.WaitHandle.WaitOne(delay))
+                        throw new OperationCanceledException(cancellation);
+                }
+
+                _applicationModel.Invoke(() => _predefinesModel.FlowStatus = "Completed");
+            }
+            catch (OperationCanceledException)
+            {
+                _applicationModel.Invoke(() => _predefinesModel.FlowStatus = "Stopped");
+            }
+            catch (Exception exception)
+            {
+                _applicationModel.Invoke(() => _predefinesModel.FlowStatus = $"Stopped: {exception.Message}");
+            }
+            finally
+            {
+                _applicationModel.Invoke(() =>
+                {
+                    if (originalModel != null)
+                        _applicationModel.CommandClassesModel = originalModel;
+                    _predefinesModel.IsFlowRunning = false;
+                });
+                lock (_flowLock)
+                {
+                    _activeSendCommand = null;
+                    if (ReferenceEquals(_flowCancellation, cancellationSource))
+                        _flowCancellation = null;
+                    cancellationSource.Dispose();
+                }
+            }
+        }
+
+        public void CancelGroup()
+        {
+            SendCommand activeSendCommand;
+            lock (_flowLock)
+            {
+                _flowCancellation?.Cancel();
+                activeSendCommand = _activeSendCommand;
+            }
+
+            activeSendCommand?.Cancel(null);
         }
 
         public CommandExecutionResult Initialize()
@@ -72,7 +192,13 @@ namespace ZWaveController.Services
 
         public CommandExecutionResult LoadGroup(string groupName, string json)
         {
-            var list = JsonConvert.DeserializeObject<IList<PayloadItem>>(json).ToArray();
+            if (string.IsNullOrWhiteSpace(groupName) || string.IsNullOrWhiteSpace(json))
+                return CommandExecutionResult.Failed;
+
+            var list = JsonConvert.DeserializeObject<IList<PayloadItem>>(json)?.ToArray();
+            if (list == null)
+                return CommandExecutionResult.Failed;
+
             CommandExecutionResult ret = AddGroup(groupName);
             if (ret == CommandExecutionResult.OK)
             {
@@ -80,43 +206,48 @@ namespace ZWaveController.Services
                 foreach (var item in list)
                 {
                     ret = AddItemToGroup(groupName, item);
-
                     if (ret == CommandExecutionResult.OK)
                     {
-                        _predefinesModel.SelectedItem = _predefinesModel.SelectedGroup.Items.FirstOrDefault();
+                        _predefinesModel.SelectedItem = _predefinesModel.SelectedGroup?.Items?.FirstOrDefault();
                     }
                 }
             }
             return ret;
         }
 
-        public CommandExecutionResult SaveGroup(string name, string path)
+        public CommandExecutionResult SaveGroup(string groupName, string filePath)
         {
+            if (string.IsNullOrWhiteSpace(groupName) || string.IsNullOrWhiteSpace(filePath))
+                return CommandExecutionResult.Failed;
+
             CommandExecutionResult ret = CommandExecutionResult.Failed;
-            var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == name);
+            var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
             if (group != null)
             {
                 try
                 {
                     var payloadItems = group.Items.Select(i => i.Item.PayloadItem).ToList();
                     var json = JsonConvert.SerializeObject(payloadItems);
-                    File.WriteAllText(path, json);
+                    File.WriteAllText(filePath, json);
                     ret = CommandExecutionResult.OK;
                 }
-                catch (Exception ex)
+                catch (Exception)
                 {
-                    // Return error to Command. If needed.
+                    ret = CommandExecutionResult.Failed;
                 }
             }
             return ret;
         }
 
-        public CommandExecutionResult AddGroup(string name)
+        public CommandExecutionResult AddGroup(string groupName)
         {
+            if (string.IsNullOrWhiteSpace(groupName))
+                return CommandExecutionResult.Failed;
+
             CommandExecutionResult ret = CommandExecutionResult.Failed;
             _applicationModel.Invoke(() =>
             {
-                var group = _predefinesModel.CreateFavoriteGroup(GetGroupName(name));
+                var group = _predefinesModel.CreateFavoriteGroup(GetGroupName(groupName));
                 _predefinesModel.PredefinedGroups.Add(group);
                 _predefinesModel.SelectedGroup = _predefinesModel.PredefinedGroups.LastOrDefault();
                 ret = CommandExecutionResult.OK;
@@ -124,19 +255,19 @@ namespace ZWaveController.Services
             return ret;
         }
 
-        public CommandExecutionResult RenameGroup(string name, string newName)
+        public CommandExecutionResult RenameGroup(string groupName, string newGroupName)
         {
             CommandExecutionResult ret = CommandExecutionResult.Failed;
-            if (!string.IsNullOrEmpty(name) && !string.IsNullOrEmpty(newName) && !_predefinesModel.PredefinedGroups.Any(x => x.Name == newName))
+            if (!string.IsNullOrEmpty(groupName) && !string.IsNullOrEmpty(newGroupName) && !_predefinesModel.PredefinedGroups.Any(x => x.Name == newGroupName))
             {
-                var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == name);
+                var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
                 if (group != null)
                 {
                     _applicationModel.Invoke(() =>
                     {
-                        group.Name = newName;
+                        group.Name = newGroupName;
                         _predefinesModel.SelectedGroup = _predefinesModel.PredefinedGroups.FirstOrDefault(x => x == group);
-                        _predefinesModel.PredefinedGroups = _predefinesModel.PredefinedGroups; // can't update LIST!!! + selected in list
+                        _predefinesModel.PredefinedGroups = _predefinesModel.PredefinedGroups;
                         ret = CommandExecutionResult.OK;
                     });
                 }
@@ -144,28 +275,31 @@ namespace ZWaveController.Services
             return ret;
         }
 
-        public CommandExecutionResult CloneGroup(string originalName, string newName = null)
+        public CommandExecutionResult CloneGroup(string groupName, string newGroupName = null)
         {
             CommandExecutionResult ret = CommandExecutionResult.Failed;
-            if (!string.IsNullOrEmpty(originalName) && _predefinesModel.PredefinedGroups.Any(x => x.Name == originalName))
+            if (!string.IsNullOrEmpty(groupName) && _predefinesModel.PredefinedGroups.Any(x => x.Name == groupName))
             {
-                var cloneName = string.IsNullOrEmpty(newName) || newName == originalName ? GetGroupName(originalName) : newName;
+                var cloneName = string.IsNullOrEmpty(newGroupName) || newGroupName == groupName ? GetGroupName(groupName) : newGroupName;
                 ret = AddGroup(cloneName);
-                var originalGroup = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == originalName);
-                foreach (var payloadItem in originalGroup?.Items?.Select(x => x.Item.PayloadItem).ToList())
+                if (ret == CommandExecutionResult.OK)
                 {
-                    AddItemToGroup(cloneName, payloadItem);
+                    var originalGroup = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
+                    foreach (var payloadItem in originalGroup?.Items?.Select(x => x.Item.PayloadItem).ToList() ?? new List<PayloadItem>())
+                    {
+                        AddItemToGroup(cloneName, payloadItem);
+                    }
                 }
             }
             return ret;
         }
 
-        public CommandExecutionResult DeleteGroup(string name)
+        public CommandExecutionResult DeleteGroup(string groupName)
         {
             CommandExecutionResult ret = CommandExecutionResult.Failed;
-            if (!string.IsNullOrEmpty(name))
+            if (!string.IsNullOrEmpty(groupName))
             {
-                var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == name);
+                var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
                 if (group != null)
                 {
                     _applicationModel.Invoke(() =>
@@ -194,21 +328,27 @@ namespace ZWaveController.Services
             return ret;
         }
 
-        public CommandExecutionResult AddItemToGroup(string groupName, PayloadItem payloadItem)
+        public CommandExecutionResult AddItemToGroup(string groupName, PayloadItem newItem)
         {
+            if (newItem == null)
+                return CommandExecutionResult.Failed;
+
             CommandExecutionResult ret = CommandExecutionResult.Failed;
             IPredefinedCommandGroup group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
             if (group != null)
             {
-                var favoriteItem = _predefinesModel.GetItem(payloadItem);
-                favoriteItem.Item.Id = group.GetFreeFavoriteItemId();
-                _applicationModel.Invoke(() =>
+                var favoriteItem = _predefinesModel.GetItem(newItem);
+                if (favoriteItem?.Item != null)
                 {
-                    group.Items.Add(favoriteItem);
-                    _predefinesModel.SelectedGroup = _predefinesModel.SelectedGroup;
-                    _predefinesModel.SelectedItem = _predefinesModel.SelectedGroup.Items.LastOrDefault();
-                    ret = CommandExecutionResult.OK;
-                });
+                    favoriteItem.Item.Id = group.GetFreeFavoriteItemId();
+                    _applicationModel.Invoke(() =>
+                    {
+                        group.Items.Add(favoriteItem);
+                        _predefinesModel.SelectedGroup = _predefinesModel.SelectedGroup;
+                        _predefinesModel.SelectedItem = _predefinesModel.SelectedGroup.Items.LastOrDefault();
+                        ret = CommandExecutionResult.OK;
+                    });
+                }
             }
             return ret;
         }
@@ -223,24 +363,24 @@ namespace ZWaveController.Services
                 if (favoriteItem != null)
                 {
                     _applicationModel.Invoke(() =>
+                    {
+                        group.Items.Remove(favoriteItem);
+                        uint idx = 0;
+                        foreach (var item in group.Items)
                         {
-                            group.Items.Remove(favoriteItem);
-                            uint idx = 0;
-                            foreach (var item in group.Items)
-                            {
-                                item.Item.Id = ++idx;
-                            }
-                            ret = CommandExecutionResult.OK;
-                            _predefinesModel.SelectedGroup = _predefinesModel.SelectedGroup;
-                            if (id - 1 > 0)
-                            {
-                                _predefinesModel.SelectedItem = _predefinesModel.SelectedGroup.Items.FirstOrDefault(x => x.Item.Id == id - 1);
-                            }
-                            else
-                            {
-                                _predefinesModel.SelectedItem = null;
-                            }
-                        });
+                            item.Item.Id = ++idx;
+                        }
+                        ret = CommandExecutionResult.OK;
+                        _predefinesModel.SelectedGroup = _predefinesModel.SelectedGroup;
+                        if (id - 1 > 0)
+                        {
+                            _predefinesModel.SelectedItem = _predefinesModel.SelectedGroup.Items.FirstOrDefault(x => x.Item.Id == id - 1);
+                        }
+                        else
+                        {
+                            _predefinesModel.SelectedItem = null;
+                        }
+                    });
                 }
             }
             return ret;
@@ -279,7 +419,6 @@ namespace ZWaveController.Services
             var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
             if (group != null)
             {
-
                 var currItem = group.Items.FirstOrDefault(i => i.Item.Id == id);
                 var nextItem = group.Items.FirstOrDefault(i => i.Item.Id == id + 1);
                 if (currItem != null && nextItem != null)
@@ -301,31 +440,24 @@ namespace ZWaveController.Services
             return ret;
         }
 
-
         public CommandExecutionResult CopyItem(string groupName, uint id)
         {
-            CommandExecutionResult ret = CommandExecutionResult.Failed;
             var group = _predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName);
+            if (group == null)
+                return CommandExecutionResult.Failed;
+
+            var favoriteItem = group.Items.FirstOrDefault(i => i.Item.Id == id);
+            if (favoriteItem == null)
+                return CommandExecutionResult.Failed;
+
+            return AddItemToGroup(groupName, favoriteItem.Item.PayloadItem);
+        }
+
+        public void RunGroup(string groupName)
+        {
+            var group = _predefinesModel.PredefinedGroups.FirstOrDefault(item => item.Name == groupName);
             if (group != null)
-            {
-                var favoriteItem = group.Items.FirstOrDefault(i => i.Item.Id == id);
-                if (favoriteItem != null)
-                {
-                    AddItemToGroup(groupName, favoriteItem.Item.PayloadItem);
-                }
-            }
-            return ret;
+                RunCommands(group.Items.Select(item => item.Item).ToList());
         }
-
-        public void RunGroup(string name)
-        {
-            RunCommands(_predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == name).Items.Select(i => i.Item));
-        }
-
-        public void RunCommands(string groupName, List<uint> ids)
-        {
-            RunCommands(_predefinesModel.PredefinedGroups.FirstOrDefault(i => i.Name == groupName).Items.Where(i => ids.Contains(i.Item.Id)).Select(i => i.Item));
-        }
-
     }
 }

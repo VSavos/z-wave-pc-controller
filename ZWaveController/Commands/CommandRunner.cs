@@ -8,8 +8,12 @@ namespace ZWaveController.Commands
     {
         public void ExecuteAsync(CommandBase cmd, object param)
         {
-            if (cmd == null || !cmd.IsSupportedAndReady())
+            if (cmd == null)
+                return;
+
+            if (!cmd.IsSupportedAndReady())
             {
+                cmd.NotifyCompleted();
                 return;
             }
             if (cmd.UseBackgroundThread)
@@ -19,7 +23,6 @@ namespace ZWaveController.Commands
                         var arg = (CommandExecuteArgs)state;
                         arg.Command.Execute(arg.Parameter);
                         ProcessInferiorCommands(arg.Command, arg.Parameter);
-                        // arg.Command.OnExecuteCompleted();
                     },
                     new CommandExecuteArgs { Command = cmd, Parameter = param });
             }

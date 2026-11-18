@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // SPDX-FileCopyrightText: Silicon Laboratories Inc. <https://www.silabs.com>
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using Utils.UI.Interfaces;
 using ZWaveController.Models;
 
@@ -19,7 +20,8 @@ namespace ZWaveController.Interfaces
         ISelectableItem<PredefinedPayload> SelectedItem { get; set; }
         ISelectableItem<PredefinedPayload> GetItem(PayloadItem payloadItem);
 
-
+        bool IsFlowRunning { get; set; }
+        string FlowStatus { get; set; }
 
     }
 }

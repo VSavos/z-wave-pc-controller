@@ -104,12 +104,10 @@ namespace ZWaveController.Interfaces
 
         //CommandExecutionResult ReverseList(string groupName)?
 
-        /// <summary>
-        /// Sequently Send commands from selected Group
-        /// </summary>
-        /// <param name="groupName">Selected Group Name.</param>
+        /// <summary>Sends the items in the specified group in order.</summary>
+        /// <param name="groupName">Name of the group to send.</param>
         void RunGroup(string groupName);
-        void RunCommands(string groupName, List<uint> ids);
+        void CancelGroup();
 
     }
 }

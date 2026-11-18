@@ -596,13 +596,6 @@
             </StackPanel>
             <DockPanel Margin="2" DockPanel.Dock="Bottom">
                 <DockPanel DockPanel.Dock="Right">
-                    <Button Name="SendListCommand" DockPanel.Dock="Right" HorizontalAlignment="Right" IsDefault="False"
-                        Command="{StaticResource SendPredefinedGroupCommandRef}" AutomationProperties.AutomationId="ID_BTN_SEND_LIST">
-                        <StackPanel Orientation="Horizontal">
-                            <!--<md:PackIcon Kind="PlaylistPlay" Width="24" Height="24" Margin="1"/>-->
-                            <TextBlock Text="Send List"/>
-                        </StackPanel>
-                    </Button>
                     <Button DockPanel.Dock="Right" Content="Reload XML" Command="{StaticResource ReloadXmlCommandReference}"/>
                 </DockPanel>
                 <UniformGrid Columns="3">
