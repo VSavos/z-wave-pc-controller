@@ -25,7 +25,7 @@ namespace ZWaveController.Commands
         {
             return ApplicationModel.SelectedNode != null &&
                 !_model.IsFlowRunning &&
-                _model.SelectedGroup != null && 
+                _model.SelectedGroup != null &&
                 _model.SelectedGroup.Items.Count > 0;
         }
 

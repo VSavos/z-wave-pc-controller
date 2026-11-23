@@ -559,8 +559,8 @@ namespace ZWaveControllerUI.Models
 
         ICommandClassesModel ICommandClassesModel.Clone()
         {
-            var source = ApplicationModel.CommandClassesModel;
-            var ret = new CommandClassesViewModel(ApplicationModel)
+            var source = ApplicationModel?.CommandClassesModel ?? this;
+            return new CommandClassesViewModel(ApplicationModel)
             {
                 Payload = source.Payload?.ToArray(),
                 IsCrc16Enabled = source.IsCrc16Enabled,
@@ -577,11 +577,12 @@ namespace ZWaveControllerUI.Models
                 ExpectedCommand = source.ExpectedCommand,
                 SourceEndPoint = source.SourceEndPoint,
                 DestinationEndPoint = source.DestinationEndPoint,
-                SelectedNodeItems = source.SelectedNodeItems?.Select(item => (NodeTag)item.Clone()).ToList() ?? new List<NodeTag>()
+                SelectedNodeItems = source.SelectedNodeItems?
+                    .Where(item => item != null)
+                    .Select(item => (NodeTag)item.Clone())
+                    .ToList() ?? new List<NodeTag>()
             };
-            return ret;
         }
-
 
         public ICommandClassesModel Clone(PayloadItem payloadItem)
         {
@@ -593,6 +594,7 @@ namespace ZWaveControllerUI.Models
             var ret = new CommandClassesViewModel(ApplicationModel);
             ret.FillCommandClassesViewModel(payloadItem);
             ret.SelectedNodeItems = SelectedNodeItems?
+                .Where(item => item != null)
                 .Select(item => (NodeTag)item.Clone())
                 .ToList() ?? new List<NodeTag>();
             return ret;

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // SPDX-FileCopyrightText: Silicon Laboratories Inc. <https://www.silabs.com>
-﻿using System;
+using System;
 using System.Collections.Generic;
 
 namespace ZWaveController.Commands
@@ -49,6 +49,12 @@ namespace ZWaveController.Commands
         {
             IsCancelling = false;
             var execute = _execute ?? ExecuteAction;
+            if (execute == null)
+            {
+                NotifyCompleted();
+                return;
+            }
+
             try
             {
                 execute(param);
